@@ -1,0 +1,63 @@
+# AyuSphere
+
+AI-assisted Clinical Research Intelligence Platform for Ayurveda — SIH26046
+(AIIA Clinical Trials Dashboard). Team **Bob The Builder**.
+
+Full documentation lives in [`docs/`](docs/): development plan,
+architecture, technology, application workflows, ADR decision log, the
+test-gated task board, and the [PS gap analysis](docs/gap-analysis.md) with
+its [gap-fill plan](docs/gap-plan.md) (Phases 7–10).
+
+## Stack
+
+Next.js 16 (App Router) + TypeScript · Neon Postgres + Drizzle · Auth.js v5
+(7 roles, JWT) · Claude API (Doctor Note OCR/extraction + grounded Copilot) ·
+Tailwind v4 + hand-owned shadcn-style components · Framer Motion ·
+Vitest + **PGlite** (in-process Postgres — **no Docker anywhere**, D-019).
+
+## Quickstart
+
+```bash
+pnpm install
+cp .env.example .env.local   # fill DATABASE_URL (Neon), AUTH_SECRET, ANTHROPIC_API_KEY
+pnpm db:migrate              # apply migrations to Neon
+pnpm db:seed                 # deterministic synthetic demo data (D-016)
+pnpm dev
+```
+
+Demo logins (password `Demo@1234`): `pi@aiia.demo`, `coordinator@aiia.demo`,
+`monitor@aiia.demo`, `ethics@aiia.demo`, `pv@aiia.demo`, `admin@aiia.demo`,
+`regulator@aiia.demo` (read-only).
+
+## Tests (the task gates)
+
+```bash
+pnpm verify      # runs typecheck and full vitest suite
+pnpm test        # 157 tests: domain rules + services on PGlite + static design QA
+pnpm typecheck
+pnpm build
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, architecture conventions, and development setup.
+
+Every task in [`docs/tasks.md`](docs/tasks.md) shipped only after its
+test gate passed. Key suites: lifecycle state machine, ALCOA+ audit atomicity,
+enrolment guards, visit windows, CRF immutability + versioned corrections,
+AE escalation clock, alert idempotency/auto-resolve, the full Doctor Note
+extraction pipeline (mocked Claude), Copilot grounding (declines on empty
+retrieval), FHIR/SDTM exports, regulator read-only, and the
+one-font/two-sizes design rule enforced statically.
+
+## Notes
+
+- Trial-level metadata can be REAL public CTRI registry records (titles, CTRI
+  numbers, interventions, sponsors, sites/states) scraped politely by
+  `scripts/scrape/ctri_scrape.py` (crawl4ai, pip-only — no Docker) and seeded
+  via `pnpm db:seed:real` (idempotent; see D-021). **All participant-level
+  data is synthetic** (`src/db/seed.ts` / `src/db/seed-real.ts`, fixed faker
+  seed). No real personal data may enter any environment.
+- The participants table has **no identifier columns** — de-identification by
+  schema.
+- `audit_events` is insert-only; every mutation commits inside `withAudit()`.
+- Doctor Note drafts never auto-commit: low-confidence and flagged fields must
+  be explicitly confirmed, and only the PI can approve into the record.

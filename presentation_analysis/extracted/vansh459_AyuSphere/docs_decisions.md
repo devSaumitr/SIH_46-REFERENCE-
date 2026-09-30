@@ -1,0 +1,266 @@
+# AyuSphere — Decision Log (ADR)
+
+Every significant decision taken for the AyuSphere build is recorded here, newest at the bottom.
+Format: **ID · Date · Decision · Alternatives considered · Rationale · Consequences**.
+
+Related docs: [development-plan.md](development-plan.md) · [architecture.md](architecture.md) · [technology.md](technology.md) · [workflow.md](workflow.md)
+
+---
+
+## D-001 — Next.js full-stack monolith (no separate backend)
+
+- **Date:** 2026-09-11
+- **Decision:** Build the entire application — UI, API, business rules, AI integration — inside one Next.js (App Router) + TypeScript codebase using server actions and route handlers. No Node/Express or FastAPI service.
+- **Alternatives:** (a) Node.js API + FastAPI AI service as shown on deck slide 3; (b) Next.js frontend + separate NestJS backend.
+- **Rationale:** User directive; one language, one repo, one deploy. Hackathon timelines punish multi-service coordination. Server actions give end-to-end type safety with Zod.
+- **Consequences:** Deck slide 3's stack graphic ("Node.js, FastAPI") is superseded — the pitch narration should say "Next.js full-stack with TypeScript." Long-running AI calls must respect serverless timeout limits (mitigated in D-005).
+
+## D-002 — Neon Postgres as the database
+
+- **Date:** 2026-09-11
+- **Decision:** Neon serverless Postgres (India-adjacent region, e.g. `ap-southeast-1`, closest available) as the single source of truth.
+- **Alternatives:** Supabase Postgres, PlanetScale (MySQL), locally installed Postgres.
+- **Rationale:** User directive. Serverless driver works over HTTP/WebSocket from Vercel functions; branching gives free per-preview databases; generous free tier for the hackathon.
+- **Consequences:** Use `@neondatabase/serverless` driver. Note for the compliance narrative: production deployment would move to an India data-resident Postgres (MeitY-empanelled cloud) — Neon is the development/demo host. Record this caveat in the demo Q&A prep.
+
+## D-003 — Drizzle ORM over Prisma
+
+- **Date:** 2026-09-11
+- **Decision:** Drizzle ORM + drizzle-kit for schema, migrations, and queries.
+- **Alternatives:** Prisma, Kysely, raw SQL.
+- **Rationale:** First-class Neon serverless-driver support, zero binary/engine (fast cold starts on Vercel), SQL-first schema that doubles as documentation, TypeScript inference end to end.
+- **Consequences:** Migrations via `drizzle-kit generate`/`migrate`. Team members familiar with Prisma need a short ramp-up; the schema file in `src/db/schema.ts` is the canonical data model.
+
+## D-004 — Auth.js (NextAuth v5) with credentials + JWT
+
+- **Date:** 2026-09-11 (user Q&A)
+- **Decision:** Auth.js v5, Credentials provider (email + password, bcrypt-hashed in Neon), JWT session strategy, role claim embedded in the token.
+- **Alternatives:** Clerk (hosted), Lucia, custom JWT.
+- **Rationale:** Free, no external service in the demo path, full control over the 7 custom roles and the audit hooks on login events. Judges can be shown auth working offline of any third party.
+- **Consequences:** We own password hashing, session invalidation, and rate limiting on the login route. Demo accounts (one per role) are created by the seed script.
+
+## D-005 — Claude API for OCR/extraction and Copilot (no Tesseract, no Python)
+
+- **Date:** 2026-09-11 (user Q&A)
+- **Decision:** Doctor Note Intelligence uses Claude's vision capability (image in → structured JSON out with per-field confidence) via a Next.js route handler. The AI Copilot uses Claude with retrieved, RBAC-filtered trial records as context.
+- **Alternatives:** Tesseract + spaCy in a FastAPI microservice (deck slide 3); Google Vision API; AWS Textract.
+- **Rationale:** A vision LLM handles handwriting + entity extraction + CRF-field mapping in one prompted step, which Tesseract alone cannot; removes a whole service from the architecture. Structured-output prompting returns exactly the CRF draft shape we need.
+- **Consequences:** Deviation from deck slide 3 ("Tesseract") — position Claude as the "Vision-LLM" the slide already names. API cost is bounded by demo volume. All extraction responses must carry confidence values and be treated as **draft-only until doctor approval** (see workflow.md §6). Model: default `claude-sonnet-5`; the model id is a config value, not hard-coded.
+
+## D-006 — shadcn/ui + Tailwind as the component base
+
+- **Date:** 2026-09-11
+- **Decision:** shadcn/ui components (copied into the repo, fully ownable) on Tailwind CSS, restyled with our glass/clay token layer.
+- **Alternatives:** MUI, Ant Design, Chakra, Mantine.
+- **Rationale:** User directive. shadcn's copy-in model lets us bend every component to the glass/clay design language; Radix primitives give accessibility for free.
+- **Consequences:** No component library version-lock; the design tokens in `globals.css`/`tailwind.config.ts` are the single styling authority.
+
+## D-007 — Glassmorphism + claymorphism hybrid, with strict usage rules
+
+- **Date:** 2026-09-11
+- **Decision:** Two surface treatments only: **glass** (translucent, `backdrop-blur`, 1px light border) for navigation, overlays, modals, and the Copilot panel; **clay** (soft extruded, large radius, layered soft shadows, inner highlight) for content cards, KPI tiles, and primary CTAs. Never mixed on the same element.
+- **Alternatives:** Pure flat minimal; neumorphism; standard Material elevation.
+- **Rationale:** User directive. The rule ("glass = chrome, clay = content") keeps the hybrid coherent instead of decorative.
+- **Consequences:** Both treatments are defined once as Tailwind utilities/CSS classes (`.glass`, `.clay`, `.clay-sm`) — components never hand-roll blur/shadow values. Contrast on glass surfaces must be AA-checked.
+
+## D-008 — One font, exactly two font sizes
+
+- **Date:** 2026-09-11
+- **Decision:** Single typeface: **Plus Jakarta Sans** (variable). Exactly two sizes: `--text-body: 0.875rem` (14px) and `--text-heading: 1.5rem` (24px). All other hierarchy comes from weight (400/500/700), opacity steps (100%/70%/50%), letter-spacing, and uppercase micro-labels at body size.
+- **Alternatives:** Inter; a two-typeface system; a conventional 6-step type scale.
+- **Rationale:** User directive ("only 1 font and 2 font sizes, minimalist"). Constraint enforces the minimalist discipline; Jakarta Sans has the geometric warmth that suits a healthcare-consumer aesthetic (Airbnb-adjacent).
+- **Consequences:** Tailwind's default text-size utilities are disabled/unused; only `text-body` and `text-heading` tokens exist. Big KPI numerals use `text-heading` with weight 700 — no third size is introduced. Edge cases (chart axis labels, badges) use `text-body` scaled by opacity/weight, never a new size.
+
+## D-009 — Framer Motion for animation, Airbnb-style motion values
+
+- **Date:** 2026-09-11
+- **Decision:** Framer Motion (`motion` package) for all animation. Fixed motion vocabulary: durations 200ms (micro) / 300ms (standard) / 450ms (page), easing `cubic-bezier(0.32, 0.72, 0, 1)`, spring for drag/hover lift, `AnimatePresence` for exits, shared-layout transitions for list→detail, staggered children (40ms) on dashboards. `prefers-reduced-motion` respected globally.
+- **Alternatives:** CSS transitions only; GSAP; React Spring.
+- **Rationale:** User directive ("modern smooth animations like Airbnb"). A fixed vocabulary keeps motion consistent — the Airbnb feel comes from restraint plus physicality, not variety.
+- **Consequences:** A `src/lib/motion.ts` exports the variants catalog; components import variants, never inline ad-hoc values.
+
+## D-010 — Append-only audit trail for ALCOA+
+
+- **Date:** 2026-09-11
+- **Decision:** A single `audit_events` table, insert-only (no UPDATE/DELETE grants in app role), written by the service layer on every mutation: actor, role, action, entity type/id, before/after JSON, timestamp, request id. Domain tables use soft-delete + status fields; nothing is hard-deleted.
+- **Alternatives:** Postgres triggers writing the log; temporal tables; event-sourcing everything.
+- **Rationale:** PS mandates an "immutable, time-stamped audit trail" (ALCOA+). Service-layer writes keep the log semantically rich (business action names, not row diffs); insert-only DB grants provide the immutability guarantee.
+- **Consequences:** Every server action goes through a `withAudit()` wrapper — bypassing it is a code-review blocker. The regulator role gets a read-only audit browser (workflow.md §13).
+
+## D-011 — SWR polling for "real-time", no websockets in MVP
+
+- **Date:** 2026-09-11
+- **Decision:** Dashboards and alert badges refresh via SWR with 10–15s `refreshInterval` plus revalidate-on-focus. No websocket/SSE infrastructure in the MVP.
+- **Alternatives:** Pusher/Ably, Supabase Realtime, self-hosted SSE.
+- **Rationale:** The PS's "real-time" requirement is about decision latency (minutes matter, not milliseconds). Polling is zero-infra, works on Vercel serverless, and demos identically.
+- **Consequences:** Documented honestly as a staged item — roadmap slot for SSE if ever needed. Alert evaluation itself runs synchronously on writes + a Vercel cron sweep (see architecture.md §8).
+
+## D-012 — Zod as the single validation layer
+
+- **Date:** 2026-09-11
+- **Decision:** Zod schemas define every form, server-action input, CRF field ruleset, and Claude structured-output shape. Shared between client and server from `src/lib/schemas/`.
+- **Alternatives:** Yup, Valibot, per-layer manual validation.
+- **Rationale:** One schema = client validation + server enforcement + TypeScript types + the CRF range/unit checks the PS demands ("data quality checks"). Claude's extraction output is parsed through the same schemas, so AI output can never bypass validation.
+- **Consequences:** CRF templates store their field rules as data; a factory builds Zod schemas from templates at runtime.
+
+## D-013 — Recharts for dashboard visualization
+
+- **Date:** 2026-09-11
+- **Decision:** Recharts for enrolment curves, site-performance bars, participant-distribution donuts, and KPI sparklines.
+- **Alternatives:** Chart.js, Visx, Tremor, ECharts.
+- **Rationale:** React-native composition model, plays well with shadcn (shadcn's chart primitives wrap Recharts), light enough for the MVP chart set.
+- **Consequences:** Chart colors bind to the design tokens (D-015 palette), never library defaults; axis/tick labels use the body size token per D-008.
+
+## D-014 — Vercel hosting + Vercel Blob for file storage
+
+- **Date:** 2026-09-11
+- **Decision:** Deploy on Vercel (preview per PR, production on main). Doctor-note images and trial documents go to Vercel Blob, private access, URLs resolved through an authorizing route handler.
+- **Alternatives:** Netlify, Railway, AWS Amplify; S3/UploadThing/Supabase Storage for files.
+- **Rationale:** Tightest Next.js integration, zero-config previews for team demos; Blob keeps storage in the same account/console.
+- **Consequences:** Original note images are retained as **source evidence** (PS/feature-plan requirement) with their extraction records pointing at the blob URL. Same data-residency caveat as D-002 for the production narrative.
+
+## D-015 — Color system: Ayurveda green primary + semantic status set
+
+- **Date:** 2026-09-11
+- **Decision:** Primary `#1B7A43` (deep Ayurveda green) with a 3-step tint ramp; neutrals are warm off-whites/charcoals; semantic set: success green, warning amber, danger red (AE/SAE + overdue), info blue. Dark-ink-on-light default theme. Status colors are reserved for status — never decoration.
+- **Alternatives:** Full 10-step Tailwind palette per hue; multi-accent theme.
+- **Rationale:** Continuity with the deck's green identity; minimalism rule (D-008 spirit) extends to color: few tokens, strict semantics. Clinical software must make danger/overdue unmistakable.
+- **Consequences:** Tokens defined as CSS variables consumed by Tailwind config; charts, badges, and the escalation clock all pull from the same set.
+
+## D-016 — Synthetic data only, generated by a seed script
+
+- **Date:** 2026-09-11
+- **Decision:** All demo data is synthetic, generated deterministically by `src/db/seed.ts` (faker with a fixed seed): 7 role users, ~4 trials across lifecycle stages, ~8 sites, ~400 participants, visits, CRF entries, AEs at varying deadline proximity, and pre-aged audit events. Trial titles/shapes modeled on public CTRI records (metadata only).
+- **Alternatives:** Hand-entered demo data; scraped real datasets.
+- **Rationale:** The PS mandates synthetic/de-identified data — clinical-trial data is sensitive personal data under DPDP. Deterministic seeding makes every demo and preview environment identical.
+- **Consequences:** No real personal data ever enters any environment. The seed intentionally plants "demo moments": one AE near its reporting deadline, one lagging site, one data-quality conflict for the Doctor Note demo.
+
+## D-017 — FHIR/CDISC focused subset first
+
+- **Date:** 2026-09-11
+- **Decision:** Interoperability ships as a focused, demonstrable subset: FHIR R4 `ResearchStudy`, `ResearchSubject`, `Patient` (de-identified), `AdverseEvent` JSON export; CDISC SDTM `DM` (demographics) and `AE` (adverse events) domains as CSV/Define-XML-stub. CDASH-style naming used in CRF templates from day one.
+- **Alternatives:** Full SDTM/ADaM pipeline; HAPI FHIR server integration; skip interop entirely.
+- **Rationale:** Matches the PS's staged-build expectation and deck slide 4's stated risk control ("focused subset first, expand via mapping library"). A judge can be shown a real FHIR bundle and a real SDTM file — depth over breadth.
+- **Consequences:** Internal schema fields carry CDASH-aligned names so export is mapping, not migration. ADaM and full Define-XML are roadmap items, said plainly.
+
+## D-018 — Documentation-first: this 5-file docs suite precedes code
+
+- **Date:** 2026-09-11
+- **Decision:** `docs/` (development-plan, architecture, technology, workflow, decisions) is written before scaffolding the app; all future significant choices append to this file.
+- **Alternatives:** README-only; docs after code.
+- **Rationale:** User directive; a 6-member SIH team needs a shared contract before parallel work starts.
+- **Consequences:** PRs that contradict a recorded decision must either follow it or amend the ADR first.
+
+## D-019 — Docker removed completely; PGlite for tests
+
+- **Date:** 2026-09-11
+- **Decision:** No Docker anywhere in development, testing, or deployment. Local dev runs `pnpm dev` against a Neon dev branch; automated tests run against **PGlite** (`@electric-sql/pglite`) — a real in-process Postgres (WASM) that Drizzle supports natively, needing no container, no daemon, no install beyond `pnpm install`. CI and Vercel likewise container-free.
+- **Alternatives:** Postgres in Docker for local dev/tests (deck slide 3 showed a Docker logo); testcontainers; mocking the DB layer.
+- **Rationale:** User directive ("remove docker completely"). PGlite gives faithful Postgres semantics for service-layer tests with zero infrastructure; Neon's serverless model already removed the need for a containerized runtime.
+- **Consequences:** Deck slide 3's Docker logo is superseded in the technical narrative. Tests exercising Postgres-specific behavior run on PGlite; anything PGlite can't express (rare) is covered against the Neon dev branch manually. No `Dockerfile`/`docker-compose` will ever exist in the repo.
+
+## D-020 — Test-gated task workflow (Vitest)
+
+- **Date:** 2026-09-11
+- **Decision:** Every phase is broken into tasks in [tasks.md](tasks.md); a task is **done only when its minimum tests pass** (`pnpm test` green + `tsc --noEmit` clean), and the next task starts only then. **Vitest** is the test runner: pure domain logic tested as unit tests, services tested against PGlite, AI flows tested with a mocked Claude client, UI gated by typecheck + production build.
+- **Alternatives:** Jest; test-after-phase instead of test-per-task; E2E-only testing.
+- **Rationale:** User directive (each task completes when it passes minimum tests, then proceed). Vitest is the fastest TS-native runner and shares the Vite pipeline.
+- **Consequences:** `docs/tasks.md` is the live task board — each task lists its test gate and status. A red test blocks progression, not just merging.
+
+## D-021 — Real CTRI registry metadata for trials; participants stay synthetic
+
+- **Date:** 2026-09-12
+- **Decision:** Trial-level seed data now comes from REAL public records of the Clinical Trials Registry – India (ctri.nic.in): Ayurveda trials scraped by `scripts/scrape/ctri_scrape.py` using the **crawl4ai** Python library (pip-only install, `crawl4ai-setup` for its Playwright browser — no Docker, honoring D-019). Only public registry METADATA is taken: title, CTRI number, study type, phase, intervention names, target sample size, sponsor, health condition, site names/states. CTRI's keyword search is CAPTCHA-gated, so the scraper walks the public read-only trial views (`pmaindet2.php` with base64 `EncHid` ids, descending from the newest registrations) sequentially with a politeness delay and filters Type of Study = Ayurveda. `src/db/seed-real.ts` (`pnpm db:seed:real`) inserts these idempotently (existing ctriNumbers skipped) alongside the demo seed. **All participant-level data remains synthetic** (faker, fixed seed) per D-016 — the scraper never extracts PI names, contacts, or any person-level fields.
+- **Alternatives:** Keep fully fabricated trial metadata (D-016 status quo); WHO ICTRP mirror; CAPTCHA-solving form automation (rejected — bypassing the registry's bot gate).
+- **Rationale:** Real CTRI registration numbers and titles make the demo credible to domain judges while staying inside the SIH problem statement's DPDP mandate: registry metadata is public by design; participant data must be synthetic/de-identified.
+- **Consequences:** `src/db/data/ctri_trials.json` is a committed snapshot (source + scraped_at recorded). Re-scraping is manual and polite. Test gate: `tests/seed-real.test.ts` (CTRI number format, template coverage, synthetic-participant bounds, determinism, idempotency).
+
+## D-022 — Electronic signatures: password re-auth + payload hash (MVP e-sign)
+
+- **Date:** 2026-09-12
+- **Decision:** Record-freezing actions (CRF approve, extraction approve, AE mark-reported) require an electronic signature: the actor re-enters their password (bcrypt-verified), states a fixed signature meaning, and a `signatures` row stores actor, role, entity, action, meaning, a SHA-256 hash of the canonical signed payload, and timestamp — inserted in the same transaction as the guarded mutation.
+- **Alternatives:** Third-party e-sign (DocuSign-style); cryptographic key pairs per user; keep plain authenticated clicks.
+- **Rationale:** The PS demands "electronic-signature and data-integrity controls consistent with GCP"; architecture.md §12 promised this control but nothing existed in code (gap G5). Password re-auth + hash + meaning is the recognisable 21-CFR-11-style shape, achievable in a hackathon with zero external services.
+- **Consequences:** Approval UIs gain a signing dialog; the audit browser shows signature chips. Stated honestly as an MVP e-signature (no PKI, no long-term key custody). Test gate in tasks.md T7.1.
+
+## D-023 — Alert/KPI thresholds become admin-configurable data
+
+- **Date:** 2026-09-12
+- **Decision:** The hardcoded rule constants (`ENROLMENT_LAG_THRESHOLD`, `DEFAULT_DEADLINE_RULES`, AE 24 h warning window, milestone 7-day lookahead, monitoring cadence) move into an `alert_config` document in the existing `app_settings` table, edited from an admin Settings card, Zod-validated, audited, with today's constants as fallback defaults.
+- **Alternatives:** New `alert_rules` table with per-rule rows; environment variables; leave hardcoded.
+- **Rationale:** The PS says "configurable KPIs and alerting" literally (gap G8); `app_settings` already exists for AI config, so the same pattern costs one Zod schema and one settings card.
+- **Consequences:** `sweepAlerts()` and `computeDeadlines()` read config with defaults, so existing tests stay green; new tests cover config-driven behaviour changes.
+
+## D-024 — Bundled demo-subset dictionaries for MedDRA/WHODrug coding
+
+- **Date:** 2026-09-12
+- **Decision:** AE coding uses bundled, clearly-labeled demo subsets shipped as TypeScript modules (`src/lib/dictionaries/`): ~200 MedDRA-like `{code, pt, soc}` terms relevant to Ayurveda trials and an ASU-formulation WHODrug-like list. The AE form gains an autocomplete picker; supplied codes must exist in the subset; SDTM `AEDECOD` and the FHIR AdverseEvent coding consume them.
+- **Alternatives:** License real MedDRA/WHODrug (out of hackathon scope and budget); free-text codes (status quo, gap G1); UMLS/SNOMED as a stand-in.
+- **Rationale:** The PS names MedDRA/WHODrug coding explicitly; the honest hackathon posture (already stated in the development plan's out-of-scope list) is a structurally-faithful demo subset, positioned as swappable for licensed dictionaries in production.
+- **Consequences:** Subsets are code-reviewable data files; the demo must state "demo subset" on the picker. Coding becomes validated, not free text.
+
+## D-025 — NPvCC spontaneous ADR intake is a flagged stretch, not core scope
+
+- **Date:** 2026-09-12
+- **Decision:** A standalone `suspected_adrs` intake (spontaneous ASU&H ADR reports outside trials, per AIIA's NPvCC role) is planned as stretch task T8.3 — built only if demo time allows, after the trial-safety depth (signals, SAE report) lands.
+- **Alternatives:** Treat NPvCC intake as core (PS background implies it); skip entirely.
+- **Rationale:** The PS's *expected solution* list centres trial pharmacovigilance; spontaneous surveillance is background context. Signal aggregation (T8.1) is designed to accept a "spontaneous" source series so the stretch bolts on without rework.
+- **Consequences:** The demo narrative mentions NPvCC readiness either way; the schema for spontaneous reports stays isolated from trial participants (de-identification unaffected). **Resolution (2026-09-13): built** — T8.3 shipped with its test gate; spontaneous reports render in the signal view as the "NPvCC" series.
+
+## D-026 — FHIR REST read API + import-to-draft as the EDC/HIS interoperability demo
+
+- **Date:** 2026-09-12
+- **Decision:** Interoperability goes live (not download-only): authenticated, audited FHIR R4 read endpoints (`GET /api/fhir/ResearchStudy/[id]`, `GET /api/fhir/Bundle/[trialId]`) serving the existing mappers as `application/fhir+json`, plus `POST /api/fhir/import` accepting an Observation bundle that creates a **draft** CRF entry routed through the normal validate→submit→approve (and sign, D-022) path. ABDM is addressed as a documented roadmap (the FHIR endpoints are the ABDM-compatible building block); no mocked ABHA integration.
+- **Alternatives:** Real EDC (REDCap/OpenClinica) integration; HAPI FHIR server; keep export-only.
+- **Rationale:** PS asks for "HL7 FHIR R4 / ABDM interoperability with EDC and the hospital information system" (gap G4). A live endpoint a judge can `curl`, and an import that visibly lands as a reviewable draft, demonstrates conformance without faking an external system; drafts-only preserves the "nothing auto-commits" invariant (D-005 spirit).
+- **Consequences:** Route handlers reuse export mappers (no duplicate mapping logic); import is Zod-gated like AI output. ABHA/ABDM stays out of the de-identified research schema by design.
+
+## D-027 — Deterministic permuted-block randomization replaces free-text arm entry
+
+- **Date:** 2026-09-12
+- **Decision:** Trials carry an `arms` JSONB config (`[{name, ratio}]`, scaffolded at creation); enrolment assigns the arm via a pure permuted-block allocator (`src/lib/rules/randomization.ts`, block size 2×∑ratio, injectable RNG for deterministic tests) instead of accepting a free-text `arm` argument. MVP is open-label — no allocation concealment or blinding is claimed.
+- **Alternatives:** Keep manual arm entry (status quo, gap G7); simple coin-flip randomization (no balance guarantee); external randomization service.
+- **Rationale:** The PS tracks "enrolment and randomization against target"; a real allocator with block balance is small, pure, and unit-testable in the repo's style, and turns a compliance gap into a demonstrable calculation.
+- **Consequences:** `enrolParticipant`'s signature changes (breaking change confined to one service + its callers/tests); allocation details land in the audit snapshot. Blinding/concealment stated plainly as out of MVP scope.
+
+## D-028 — Sphera: Groq-powered role-aware floating guide
+
+- **Date:** 2026-09-13
+- **Note:** merged from a parallel branch as D-022; renumbered D-028 here because D-022–D-027 were already taken by the gap-fill ADRs above.
+- **Decision:** In-app onboarding guide "Sphera" — a floating leaf-orb on every authed screen backed by Groq (`llama-3.3-70b-versatile` default) via plain fetch/SSE (no groq-sdk). Persona and knowledge are separate blocks: `src/lib/guide/knowledge.ts` is the single source of truth per role; the server injects ONLY the session role's slice, so the guide cannot describe another role's screens. Groq key/model stored in `app_settings` (`guide_ai`) via Settings → Guide Assistant, env fallback `GROQ_API_KEY`.
+- **Alternatives:** groq-sdk dependency; baking feature prose into the persona prompt; reusing the clinical AI provider (Gemini/Claude) for the guide; Lottie/Rive character.
+- **Rationale:** User-approved spec: Groq brain, character as the face of a context-injection pipeline; knowledge updates must not touch the persona. Framer-motion orb keeps zero new dependencies and design-system compliance.
+- **Consequences:** Ship a feature → update knowledge.ts (drift-guard test pins sections to NAV_ITEMS). Guardrails pinned by tests: no cross-role leakage, no prompt/provider disclosure, cannot_do honesty, key never audited or client-exposed.
+
+## D-029 — Sphera v2: LangChain + LangGraph with Neon-persisted thread memory
+
+- **Date:** 2026-09-13
+- **Decision:** The guide's brain moves from a hand-rolled Groq SSE client to **LangChain + LangGraph**: a `StateGraph(MessagesAnnotation)` whose respond node streams `ChatGroq` tokens through the custom stream writer, with **server-side memory** — per-user conversation threads persisted in a new `guide_messages` table (userId + threadId + role + content). The widget no longer sends history; it rehydrates the thread via `GET /api/guide` and can rotate to a new thread. Config resolution is unchanged (Admin-saved Settings row first — one stored key serves every role — env `GROQ_API_KEY`/`GROQ_API` fallback) but the DB read is capped at 3s and the model call at 20s so nothing can ride into a platform 504; `maxDuration` raised to 60.
+- **Alternatives:** LangGraph's official `PostgresSaver` checkpointer (adds a `pg` dependency and checkpoint tables outside Drizzle migrations, untestable on PGlite); in-memory `MemorySaver` (lost on every serverless cold start); keeping the bespoke SSE client.
+- **Rationale:** User directive (LangGraph/LangChain with persistence). A custom Drizzle table keeps memory testable on PGlite (D-019/D-020), inside our migration flow, and queryable; the injectable `BaseChatModel` keeps tests offline (FakeListChatModel) while production uses ChatGroq with `reasoning_effort: low` for gpt-oss models.
+- **Consequences:** `src/lib/guide/groq.ts` deleted; new `graph.ts`/`model.ts`/`guide-chat.ts`; migration 0009. Guide chats remain communication — never audited (same stance as `messages`). Memory survives refresh, logout, and devices; "New chat" starts a fresh thread while old ones remain stored.
+
+---
+
+## D-030 — Response caching: in-process TTL, with explicit never-cache carve-outs
+
+- **Date:** 2026-09-14
+- **Context:** Repeat loads re-ran heavy portfolio aggregates on every request, every Sphera turn re-read the settings row, and identical guide questions re-billed Groq. But this is an audited clinical app: some responses must never be cached.
+- **Decision:** One dependency-free primitive, `src/lib/ttl-cache.ts` (per-instance Map + TTL + in-flight dedupe + 500-entry cap; Vercel Fluid Compute reuses instances, so warm instances get real hit rates). Cached: dashboard/monitoring portfolio aggregates (45s), quick-search results per role+query (60s server + 30s private browser), Sphera guide config (60s), and Sphera replies ONLY for empty-thread non-greeting turns (10min; with no history the inputs are fully determined by role+name+question, and the turn is still persisted so memory stays real). Never cached, stated in code: `/api/export` and FHIR GETs (`private, no-store` — every download/read writes an audit row a cache hit would skip), `/api/badges` (instant clear after reading a thread), greetings, and any feed that must reflect the user's own mutation immediately (approvals, queries, visits, export row counts).
+- **Alternatives:** Next 16 cache APIs (`node_modules/next/dist/docs` absent in this checkout — semantics unverifiable per AGENTS.md, and route-level caching cannot express the audit carve-outs); Redis/Upstash (infra + a secret for a demo-scale win).
+- **Rationale:** Biggest latency/cost wins with zero infrastructure, unit-testable, and the correctness-critical paths are explicitly exempted rather than accidentally cached.
+- **Consequences:** Cached aggregates may lag up to their TTL after a write; a cold instance is a cache miss. An Admin guide-key change can take ≤60s to apply. If cross-instance invalidation is ever needed, swap the primitive for a shared store behind the same interface.
+
+---
+
+## Template for new decisions
+
+```markdown
+## D-0XX — <short title>
+
+- **Date:** YYYY-MM-DD
+- **Decision:** <what was decided, one or two sentences>
+- **Alternatives:** <what else was considered>
+- **Rationale:** <why this option won>
+- **Consequences:** <what this commits us to, trade-offs accepted, follow-ups>
+```
